@@ -27,6 +27,7 @@ stop:
 clean:
 	$(call PROMPT, $@)
 	rm -f chromadb-test
+	docker-compose down --volumes --remove-orphans
 
 lint:
 	$(call PROMPT, $@)

@@ -1,0 +1,30 @@
+---
+id: doc1
+text: The quick brown fox jumps over the lazy dog
+metadata:
+  category: animals
+  type: classic
+---
+id: doc2
+text: A fast orange cat leaps across the sleepy puppy
+metadata:
+  category: animals
+  type: variant
+---
+id: doc3
+text: Machine learning is a subset of artificial intelligence
+metadata:
+  category: technology
+  type: ml
+---
+id: doc4
+text: Deep learning uses neural networks with many layers
+metadata:
+  category: technology
+  type: dl
+---
+id: doc5
+text: Go is a statically typed, compiled programming language
+metadata:
+  category: technology
+  type: programming

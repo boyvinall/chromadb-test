@@ -1,10 +1,11 @@
-module chroma-test
+module github.com/boyvinall/chromadb-test
 
 go 1.24.0
 
 require (
 	github.com/amikos-tech/chroma-go v0.2.6-0.20251107132904-125f30677ff0
 	github.com/urfave/cli/v3 v3.6.1
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

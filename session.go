@@ -23,7 +23,20 @@ func (s *chromaSession) Close() error {
 	return nil
 }
 
-func newSession(ctx context.Context, serverURL, embeddingType string) (*chromaSession, error) {
+func parseDistanceMetric(distanceType string) (embeddings.DistanceMetric, error) {
+	switch distanceType {
+	case "l2":
+		return embeddings.L2, nil
+	case "cosine":
+		return embeddings.COSINE, nil
+	case "ip":
+		return embeddings.IP, nil
+	default:
+		return "", fmt.Errorf("unknown distance function: %s (valid: l2, cosine, ip)", distanceType)
+	}
+}
+
+func newSession(ctx context.Context, serverURL string, embeddingCfg embeddingConfig, distanceType string) (*chromaSession, error) {
 	slog.Info("connecting to ChromaDB", "url", serverURL)
 
 	client, err := chroma.NewHTTPClient(
@@ -40,19 +53,29 @@ func newSession(ctx context.Context, serverURL, embeddingType string) (*chromaSe
 	}
 	slog.Info("connected to ChromaDB")
 
-	embeddingFunc, err := createEmbeddingFunction(embeddingType)
+	embeddingFunc, err := createEmbeddingFunction(embeddingCfg)
 	if err != nil {
 		_ = client.Close()
 		return nil, err
 	}
 
-	slog.Info("creating collection", "name", collectionName)
+	distanceMetric, err := parseDistanceMetric(distanceType)
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+
+	slog.Info("creating collection",
+		"name", collectionName,
+		"distance", distanceType,
+		"embedding", embeddingCfg.embeddingType,
+	)
 	coll, err := client.GetOrCreateCollection(ctx, collectionName,
 		chroma.WithEmbeddingFunctionCreate(embeddingFunc),
 		chroma.WithCollectionMetadataCreate(chroma.NewMetadata(
 			chroma.NewStringAttribute("description", "An example collection for testing"),
 		)),
-		chroma.WithHNSWSpaceCreate(embeddings.L2),
+		chroma.WithHNSWSpaceCreate(distanceMetric),
 	)
 	if err != nil {
 		_ = client.Close()

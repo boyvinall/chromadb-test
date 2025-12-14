@@ -2,47 +2,87 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 
 	chroma "github.com/amikos-tech/chroma-go/pkg/api/v2"
 	"github.com/urfave/cli/v3"
+	"gopkg.in/yaml.v3"
 )
 
-var sampleDocuments = []struct {
-	ID       chroma.DocumentID
-	Text     string
-	Category string
-	Type     string
-}{
-	{"doc1", "The quick brown fox jumps over the lazy dog", "animals", "classic"},
-	{"doc2", "A fast orange cat leaps across the sleepy puppy", "animals", "variant"},
-	{"doc3", "Machine learning is a subset of artificial intelligence", "technology", "ml"},
-	{"doc4", "Deep learning uses neural networks with many layers", "technology", "dl"},
-	{"doc5", "Go is a statically typed, compiled programming language", "technology", "programming"},
+type document struct {
+	ID       string            `yaml:"id"`
+	Text     string            `yaml:"text"`
+	Metadata map[string]string `yaml:"metadata"`
+}
+
+func loadDocuments(filename string) ([]document, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("open file: %w", err)
+	}
+	defer f.Close()
+
+	var documents []document
+	decoder := yaml.NewDecoder(f)
+	for {
+		var doc document
+		if err := decoder.Decode(&doc); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("parse yaml: %w", err)
+		}
+		documents = append(documents, doc)
+	}
+
+	return documents, nil
 }
 
 func addCommand(ctx context.Context, cmd *cli.Command) error {
-	session, err := newSession(ctx, cmd.String("server"), cmd.String("embedding"))
+	filename := cmd.String("file")
+	if filename == "" {
+		return fmt.Errorf("--file flag is required")
+	}
+
+	documents, err := loadDocuments(filename)
+	if err != nil {
+		return fmt.Errorf("load documents: %w", err)
+	}
+
+	if len(documents) == 0 {
+		return fmt.Errorf("no documents found in %s", filename)
+	}
+
+	session, err := newSession(ctx, cmd.String("server"), embeddingConfig{
+		embeddingType: cmd.String("embedding"),
+		openaiAPIKey:  cmd.String("openai-api-key"),
+		openaiBaseURL: cmd.String("openai-base-url"),
+		openaiModel:   cmd.String("openai-model"),
+	}, cmd.String("distance"))
 	if err != nil {
 		return err
 	}
 	defer session.Close() //nolint:errcheck
 
-	ids := make([]chroma.DocumentID, len(sampleDocuments))
-	texts := make([]string, len(sampleDocuments))
-	metadatas := make([]chroma.DocumentMetadata, len(sampleDocuments))
+	ids := make([]chroma.DocumentID, len(documents))
+	texts := make([]string, len(documents))
+	metadatas := make([]chroma.DocumentMetadata, len(documents))
 
-	for i, doc := range sampleDocuments {
-		ids[i] = doc.ID
+	for i, doc := range documents {
+		ids[i] = chroma.DocumentID(doc.ID)
 		texts[i] = doc.Text
-		metadatas[i], _ = chroma.NewDocumentMetadataFromMap(map[string]any{
-			"category": doc.Category,
-			"type":     doc.Type,
-		})
+		meta := make(map[string]any)
+		for k, v := range doc.Metadata {
+			meta[k] = v
+		}
+		metadatas[i], _ = chroma.NewDocumentMetadataFromMap(meta)
 	}
 
-	slog.Info("adding documents", "count", len(sampleDocuments))
+	slog.Info("adding documents", "count", len(documents), "file", filename)
 	if err := session.collection.Add(ctx,
 		chroma.WithIDs(ids...),
 		chroma.WithTexts(texts...),
@@ -55,13 +95,81 @@ func addCommand(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("count documents: %w", err)
 	}
-	slog.Info("documents added", "added", len(sampleDocuments), "total", count)
+	slog.Info("documents added", "added", len(documents), "total", count)
+
+	return nil
+}
+
+func listCommand(ctx context.Context, cmd *cli.Command) error {
+	session, err := newSession(ctx, cmd.String("server"), embeddingConfig{
+		embeddingType: cmd.String("embedding"),
+		openaiAPIKey:  cmd.String("openai-api-key"),
+		openaiBaseURL: cmd.String("openai-base-url"),
+		openaiModel:   cmd.String("openai-model"),
+	}, cmd.String("distance"))
+	if err != nil {
+		return err
+	}
+	defer session.Close() //nolint:errcheck
+
+	limit := int(cmd.Int("limit"))
+	offset := int(cmd.Int("offset"))
+
+	results, err := session.collection.Get(ctx,
+		chroma.WithLimitGet(limit),
+		chroma.WithOffsetGet(offset),
+		chroma.WithIncludeGet(chroma.IncludeDocuments, chroma.IncludeMetadatas),
+	)
+	if err != nil {
+		return fmt.Errorf("get documents: %w", err)
+	}
+
+	ids := results.GetIDs()
+	docs := results.GetDocuments()
+	metadatas := results.GetMetadatas()
+
+	if len(ids) == 0 {
+		fmt.Println("No documents found.")
+		return nil
+	}
+
+	fmt.Printf("=== Documents (showing %d, offset %d) ===\n", len(ids), offset)
+	for i, id := range ids {
+		fmt.Printf("\n[%d] ID: %s\n", i+1, id)
+		if i < len(docs) && docs[i] != nil {
+			text := docs[i].ContentString()
+			if len(text) > 100 {
+				text = text[:100] + "..."
+			}
+			fmt.Printf("    Text: %s\n", text)
+		}
+		if i < len(metadatas) && metadatas[i] != nil {
+			if meta, ok := metadatas[i].(*chroma.DocumentMetadataImpl); ok {
+				for _, key := range meta.Keys() {
+					if val, ok := meta.GetString(key); ok {
+						fmt.Printf("    %s: %v\n", key, val)
+					}
+				}
+			}
+		}
+	}
+
+	count, err := session.collection.Count(ctx)
+	if err != nil {
+		return fmt.Errorf("count documents: %w", err)
+	}
+	fmt.Printf("\nTotal documents in collection: %d\n", count)
 
 	return nil
 }
 
 func queryCommand(ctx context.Context, cmd *cli.Command) error {
-	session, err := newSession(ctx, cmd.String("server"), cmd.String("embedding"))
+	session, err := newSession(ctx, cmd.String("server"), embeddingConfig{
+		embeddingType: cmd.String("embedding"),
+		openaiAPIKey:  cmd.String("openai-api-key"),
+		openaiBaseURL: cmd.String("openai-base-url"),
+		openaiModel:   cmd.String("openai-model"),
+	}, cmd.String("distance"))
 	if err != nil {
 		return err
 	}
@@ -100,5 +208,34 @@ func queryCommand(ctx context.Context, cmd *cli.Command) error {
 		fmt.Printf("  [%d] ID: %s, Distance: %.4f\n      Document: %s\n", i+1, id, distance, doc)
 	}
 
+	return nil
+}
+
+func deleteCommand(ctx context.Context, cmd *cli.Command) error {
+	args := cmd.Args()
+	if args.Len() == 0 {
+		return fmt.Errorf("document ID required")
+	}
+	docID := args.First()
+
+	session, err := newSession(ctx, cmd.String("server"), embeddingConfig{
+		embeddingType: cmd.String("embedding"),
+		openaiAPIKey:  cmd.String("openai-api-key"),
+		openaiBaseURL: cmd.String("openai-base-url"),
+		openaiModel:   cmd.String("openai-model"),
+	}, cmd.String("distance"))
+	if err != nil {
+		return err
+	}
+	defer session.Close() //nolint:errcheck
+
+	slog.Info("deleting document", "id", docID)
+	if err := session.collection.Delete(ctx,
+		chroma.WithIDsDelete(chroma.DocumentID(docID)),
+	); err != nil {
+		return fmt.Errorf("delete document: %w", err)
+	}
+
+	slog.Info("document deleted", "id", docID)
 	return nil
 }
