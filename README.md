@@ -49,6 +49,16 @@ The following are currently supported:
 
 * `hash` – a simple consistent hash, not particularly recommended
 
+## Notes
+
+* Swagger API – <http://127.0.0.1:8001/docs/>
+* Chroma Cookbook – <https://cookbook.chromadb.dev/>
+    * Custom embeddings https://cookbook.chromadb.dev/embeddings/bring-your-own-embeddings/
+        * <https://go-client.chromadb.dev/embeddings/#huggingface-inference-api>
+        * <https://huggingface.co/blog/getting-started-with-embeddings>
+        * <https://huggingface.co/sentence-transformers>
+
 ## Future
 
 * See [[ENH] Implement Chroma Cloud Search API with rank expressions](https://github.com/amikos-tech/chroma-go/pull/291)
+* Re-ranking <https://go-client.chromadb.dev/rerankers/>
