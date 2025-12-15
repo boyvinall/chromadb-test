@@ -24,7 +24,7 @@ func loadDocuments(filename string) ([]document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	var documents []document
 	decoder := yaml.NewDecoder(f)
@@ -82,13 +82,25 @@ func addCommand(ctx context.Context, cmd *cli.Command) error {
 		metadatas[i], _ = chroma.NewDocumentMetadataFromMap(meta)
 	}
 
-	slog.Info("adding documents", "count", len(documents), "file", filename)
-	if err := session.collection.Add(ctx,
-		chroma.WithIDs(ids...),
-		chroma.WithTexts(texts...),
-		chroma.WithMetadatas(metadatas...),
-	); err != nil {
-		return fmt.Errorf("add documents: %w", err)
+	upsert := cmd.Bool("upsert")
+	if upsert {
+		slog.Info("upserting documents", "count", len(documents), "file", filename)
+		if err := session.collection.Upsert(ctx,
+			chroma.WithIDs(ids...),
+			chroma.WithTexts(texts...),
+			chroma.WithMetadatas(metadatas...),
+		); err != nil {
+			return fmt.Errorf("upsert documents: %w", err)
+		}
+	} else {
+		slog.Info("adding documents", "count", len(documents), "file", filename)
+		if err := session.collection.Add(ctx,
+			chroma.WithIDs(ids...),
+			chroma.WithTexts(texts...),
+			chroma.WithMetadatas(metadatas...),
+		); err != nil {
+			return fmt.Errorf("add documents: %w", err)
+		}
 	}
 
 	count, err := session.collection.Count(ctx)
@@ -175,12 +187,13 @@ func queryCommand(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer session.Close() //nolint:errcheck
 
-	queryText := "neural networks and AI"
-	slog.Info("querying collection", "query", queryText)
+	queryTexts := cmd.StringSlice("query")
+	nResults := cmd.Int("results")
+	slog.Info("querying collection", "queries", queryTexts, "n", nResults)
 
 	results, err := session.collection.Query(ctx,
-		chroma.WithQueryTexts(queryText),
-		chroma.WithNResults(3),
+		chroma.WithQueryTexts(queryTexts...),
+		chroma.WithNResults(nResults),
 	)
 	if err != nil {
 		return fmt.Errorf("query: %w", err)
